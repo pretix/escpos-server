@@ -33,6 +33,9 @@ STATUS_OFFLINE = 0x02
 STATUS_ERROR_CAUSE = 0x03
 STATUS_PAPER = 0x04
 
+def get_status():
+    return _status
+
 def _poll(dev):
     global _status
     poll_start = time.time()
