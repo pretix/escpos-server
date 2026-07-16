@@ -104,9 +104,10 @@ def printer_loop_inner(usb_product):
                 _last_poll = time.time()
 
         try:
-            data_in = out_queue.get(block=True, timeout=.001)
-            logger.debug(f"Write to printer: {data_in!r}")
-            dev.write(endpoint_out, data_in, 100)
+            while True:
+                data_in = out_queue.get(block=False)
+                logger.debug(f"Write to printer: {data_in!r}")
+                dev.write(endpoint_out, data_in, 100)
         except queue.Empty:
             pass
 
@@ -117,6 +118,8 @@ def printer_loop_inner(usb_product):
                 in_queue.put(data_out)
         except USBTimeoutError:
             pass
+
+        time.sleep(.001)
 
 
 def printer_loop(usb_product):
