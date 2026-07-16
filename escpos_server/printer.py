@@ -97,7 +97,7 @@ def printer_loop_inner(usb_product):
     while not _shutdown_requested:
         if time.time() - _last_poll > POLL_INTERVAL and print_lock.acquire(blocking=False):
             try:
-                _poll(dev, endpoint_out)
+                _poll(dev, endpoint_out, endpoint_in)
             finally:
                 print_lock.release()
                 _last_poll = time.time()
