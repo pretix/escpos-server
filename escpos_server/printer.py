@@ -113,11 +113,12 @@ def printer_loop_inner(usb_product):
             pass
 
         try:
-            while data_out := dev.read(endpoint_in, 1024):
+            while data_out := dev.read(endpoint_in, 1024, 25):
                 data_out = bytes(x for x in data_out)
                 logger.debug(f"Read from printer: {data_out!r}")
                 in_queue.put(data_out)
         except USBTimeoutError:
+            logger.debug(f"Nothing to read")
             pass
 
         time.sleep(.001)
