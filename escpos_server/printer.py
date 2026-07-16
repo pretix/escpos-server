@@ -109,6 +109,7 @@ def printer_loop_inner(usb_product):
                 logger.debug(f"Write to printer: {data_in!r}")
                 dev.write(endpoint_out, data_in, 100)
         except queue.Empty:
+            logger.debug(f"Queue is empty")
             pass
 
         try:
