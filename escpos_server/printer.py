@@ -22,8 +22,10 @@ _status = Status()
 
 # Constants
 POLL_INTERVAL = 1
+VENDOR_ID_CUSTOM = 0x0dd4
 # USB endpoints Let's hope these are constant across all ESC/POS printers
-OUT_ENDPOINT = 0x01
+OUT_ENDPOINT_EPSON = 0x01
+OUT_ENDPOINT_CUSTOM = 0x02
 IN_ENDPOINT = 0x82
 # ESC/POS parts
 DLE = 0x10
@@ -36,11 +38,11 @@ STATUS_PAPER = 0x04
 def get_status():
     return _status
 
-def _poll(dev):
+def _poll(dev, endpoint_out):
     global _status
     poll_start = time.time()
 
-    dev.write(OUT_ENDPOINT, bytes([DLE, EOT, STATUS_PAPER]), 100)
+    dev.write(endpoint_out, bytes([DLE, EOT, STATUS_PAPER]), 100)
     while not (paper_status := bytes(x for x in dev.read(IN_ENDPOINT, 1024, 100))):
         if time.time() - poll_start > POLL_INTERVAL:
             # When the printer is not ready, e.g. cover open, it will just not respond
@@ -64,6 +66,12 @@ def printer_loop_inner(usb_product):
     vendor_id = int("0x" + vendor_id, 16)
     product_id = int("0x" + product_id, 16)
     dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
+
+    if vendor_id == VENDOR_ID_CUSTOM:
+        endpoint_out = OUT_ENDPOINT_CUSTOM
+    else:
+        endpoint_out = OUT_ENDPOINT_EPSON
+
     if not dev:
         raise Exception("Could not find USB printer")
     logging.info(f"Found USB device {dev.manufacturer} {dev.product} {dev.serial_number}")
@@ -86,7 +94,7 @@ def printer_loop_inner(usb_product):
     while not _shutdown_requested:
         if time.time() - _last_poll > POLL_INTERVAL and print_lock.acquire(blocking=False):
             try:
-                _poll(dev)
+                _poll(dev, endpoint_out)
             finally:
                 print_lock.release()
                 _last_poll = time.time()
@@ -94,7 +102,7 @@ def printer_loop_inner(usb_product):
         try:
             data_in = out_queue.get(block=True, timeout=.001)
             logger.debug(f"Write to printer: {data_in!r}")
-            dev.write(OUT_ENDPOINT, data_in, 100)
+            dev.write(endpoint_out, data_in, 100)
         except queue.Empty:
             pass
 
