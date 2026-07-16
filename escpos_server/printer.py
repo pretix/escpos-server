@@ -4,6 +4,7 @@ import threading
 import time
 
 import usb.core
+from usb.core import USBTimeoutError
 
 from escpos_server.signals import shutdown_handlers
 from escpos_server.status import Status, TYPE_OFFLINE, TYPE_ONLINE
@@ -109,10 +110,13 @@ def printer_loop_inner(usb_product):
         except queue.Empty:
             pass
 
-        while data_out := dev.read(endpoint_in, 1024):
-            data_out = bytes(x for x in data_out)
-            logger.debug(f"Read from printer: {data_out!r}")
-            in_queue.put(data_out)
+        try:
+            while data_out := dev.read(endpoint_in, 1024):
+                data_out = bytes(x for x in data_out)
+                logger.debug(f"Read from printer: {data_out!r}")
+                in_queue.put(data_out)
+        except USBTimeoutError:
+            pass
 
 
 def printer_loop(usb_product):
