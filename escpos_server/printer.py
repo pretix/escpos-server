@@ -44,7 +44,7 @@ def _poll(dev, endpoint_out, endpoint_in):
     poll_start = time.time()
 
     dev.write(endpoint_out, bytes([DLE, EOT, STATUS_PAPER]), 100)
-    while not (paper_status := bytes(x for x in dev.read(endpoint_in, 1024, 100))):
+    while not (paper_status := bytes(x for x in dev.read(endpoint_in, 1024))):
         if time.time() - poll_start > POLL_INTERVAL:
             # When the printer is not ready, e.g. cover open, it will just not respond
             # on USB or network interfaces. Therefore, polling STATUS_PRINTER is also pretty
@@ -109,7 +109,7 @@ def printer_loop_inner(usb_product):
         except queue.Empty:
             pass
 
-        while data_out := dev.read(endpoint_in, 1024, 25):
+        while data_out := dev.read(endpoint_in, 1024):
             data_out = bytes(x for x in data_out)
             logger.debug(f"Read from printer: {data_out!r}")
             in_queue.put(data_out)
