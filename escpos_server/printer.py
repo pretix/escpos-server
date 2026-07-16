@@ -26,7 +26,8 @@ VENDOR_ID_CUSTOM = 0x0dd4
 # USB endpoints Let's hope these are constant across all ESC/POS printers
 OUT_ENDPOINT_EPSON = 0x01
 OUT_ENDPOINT_CUSTOM = 0x02
-IN_ENDPOINT = 0x82
+IN_ENDPOINT_EPSON = 0x81
+IN_ENDPOINT_CUSTOM = 0x82
 # ESC/POS parts
 DLE = 0x10
 EOT = 0x04
@@ -38,12 +39,12 @@ STATUS_PAPER = 0x04
 def get_status():
     return _status
 
-def _poll(dev, endpoint_out):
+def _poll(dev, endpoint_out, endpoint_in):
     global _status
     poll_start = time.time()
 
     dev.write(endpoint_out, bytes([DLE, EOT, STATUS_PAPER]), 100)
-    while not (paper_status := bytes(x for x in dev.read(IN_ENDPOINT, 1024, 100))):
+    while not (paper_status := bytes(x for x in dev.read(endpoint_in, 1024, 100))):
         if time.time() - poll_start > POLL_INTERVAL:
             # When the printer is not ready, e.g. cover open, it will just not respond
             # on USB or network interfaces. Therefore, polling STATUS_PRINTER is also pretty
@@ -69,8 +70,10 @@ def printer_loop_inner(usb_product):
 
     if vendor_id == VENDOR_ID_CUSTOM:
         endpoint_out = OUT_ENDPOINT_CUSTOM
+        endpoint_in = IN_ENDPOINT_CUSTOM
     else:
         endpoint_out = OUT_ENDPOINT_EPSON
+        endpoint_in = IN_ENDPOINT_EPSON
 
     if not dev:
         raise Exception("Could not find USB printer")
@@ -106,7 +109,7 @@ def printer_loop_inner(usb_product):
         except queue.Empty:
             pass
 
-        while data_out := dev.read(IN_ENDPOINT, 1024, 25):
+        while data_out := dev.read(endpoint_in, 1024, 25):
             data_out = bytes(x for x in data_out)
             logger.debug(f"Read from printer: {data_out!r}")
             in_queue.put(data_out)
