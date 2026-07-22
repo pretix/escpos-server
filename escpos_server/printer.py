@@ -107,7 +107,7 @@ def printer_loop_inner(usb_product):
             while True:
                 data_in = out_queue.get(block=False)
                 logger.debug(f"Write to printer: {data_in!r}")
-                dev.write(endpoint_out, data_in, 100)
+                dev.write(endpoint_out, data_in)
         except queue.Empty:
             pass
 
