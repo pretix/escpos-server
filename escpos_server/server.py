@@ -1,6 +1,5 @@
 import logging
 import queue
-import signal
 import socketserver
 import threading
 
@@ -35,7 +34,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
         while not self.server._shutdown_requested:
             try:
                 while out_data := printer.in_queue.get_nowait():
-                    logger.debug(f"Sending data: {out_data!r}")
+                    logger.debug(f"Sending data [{len(out_data)}]: {out_data!r}")
                     self.request.sendall(out_data)
             except queue.Empty:
                 pass
@@ -49,7 +48,7 @@ class TCPHandler(socketserver.BaseRequestHandler):
                 printer.print_lock.release()
                 return
 
-            logger.debug(f"Received data: {data_in!r}")
+            logger.debug(f"Received data [{len(data_in)}]: {data_in!r}")
             printer.out_queue.put(data_in)
 
 

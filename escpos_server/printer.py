@@ -11,9 +11,14 @@ from escpos_server.status import Status, TYPE_OFFLINE, TYPE_ONLINE
 
 logger = logging.getLogger(__name__)
 
-# Public to other modules
-out_queue = queue.Queue()
-in_queue = queue.Queue()
+# These variables are for synchronization between the server thread and the printer thread.
+# The lock is intended to ensure that (a) no two incoming TCP clients can print at the same time and (b)
+# no prints are running when we want to do a status call.
+# The queues are for actually moving the data between the two threads. They have a size of 1 to simulate
+# a synchronous transfer. This shouldn't be possible, but before we did that, we lost data somewhere,
+# even though I have no idea where.
+out_queue = queue.Queue(maxsize=1)
+in_queue = queue.Queue(maxsize=1)
 print_lock = threading.Lock()
 
 # Internal variables
@@ -96,7 +101,7 @@ def printer_loop_inner(usb_product):
         dev.detach_kernel_driver(i)
 
     while not _shutdown_requested:
-        if time.time() - _last_poll > POLL_INTERVAL and print_lock.acquire(blocking=False):
+        if time.time() - _last_poll > POLL_INTERVAL and print_lock.acquire(blocking=False) and out_queue.empty():
             try:
                 _poll(dev, endpoint_out, endpoint_in)
             finally:
@@ -104,17 +109,21 @@ def printer_loop_inner(usb_product):
                 _last_poll = time.time()
 
         try:
-            while True:
-                data_in = out_queue.get(block=False)
-                logger.debug(f"Write to printer: {data_in!r}")
-                dev.write(endpoint_out, data_in)
+            try:
+                while True:
+                    data_in = out_queue.get(block=False)
+                    logger.debug(f"Write to printer [{len(data_in)}]: {data_in!r}")
+                    dev.write(endpoint_out, data_in)
+            except USBTimeoutError:
+                logger.warning("Timeout while writing to USB printer, continue with next part")
+                pass
         except queue.Empty:
             pass
 
         try:
             while data_out := dev.read(endpoint_in, 1024, 25):
                 data_out = bytes(x for x in data_out)
-                logger.debug(f"Read from printer: {data_out!r}")
+                logger.debug(f"Read from printer [{len(data_out)}]: {data_out!r}")
                 in_queue.put(data_out)
         except USBTimeoutError:
             pass
