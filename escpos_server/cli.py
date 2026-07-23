@@ -29,5 +29,5 @@ def main():
 
     setup_signals()
     start_printer_thread(args.usb_product)
-    start_tcp_listen_thread(args.listen_host, args.listen_port)
+    start_tcp_listen_thread(args.listen_host, args.listen_port, args.usb_product)
     uvicorn.run(app, host=args.web_host, port=args.web_port, reload=False)

@@ -1,27 +1,18 @@
+import contextlib
 import logging
-import queue
 import threading
 import time
 
 import usb.core
-from usb.core import USBTimeoutError
+import usb.util
 
 from escpos_server.signals import shutdown_handlers
-from escpos_server.status import Status, TYPE_OFFLINE, TYPE_ONLINE
+from escpos_server.status import Status, TYPE_OFFLINE
 
 logger = logging.getLogger(__name__)
 
-# These variables are for synchronization between the server thread and the printer thread.
-# The lock is intended to ensure that (a) no two incoming TCP clients can print at the same time and (b)
-# no prints are running when we want to do a status call.
-# The queues are for actually moving the data between the two threads. They have a size of 1 to simulate
-# a synchronous transfer. This shouldn't be possible, but before we did that, we lost data somewhere,
-# even though I have no idea where.
-out_queue = queue.Queue(maxsize=1)
-in_queue = queue.Queue(maxsize=1)
-print_lock = threading.Lock()
-
 # Internal variables
+_print_lock = threading.Lock()
 _shutdown_requested = False
 _last_poll = 0
 _status = Status()
@@ -42,105 +33,106 @@ STATUS_OFFLINE = 0x02
 STATUS_ERROR_CAUSE = 0x03
 STATUS_PAPER = 0x04
 
+
+class Printer:
+    def __init__(self, usb_product):
+        self.usb_product = usb_product
+        self._dev = None
+        self._endpoint_out = OUT_ENDPOINT_EPSON
+        self._endpoint_in = IN_ENDPOINT_EPSON
+
+    def open(self):
+        logging.debug(f"Looking for USB device {self.usb_product}…")
+        vendor_id, product_id = self.usb_product.split(":", 1)
+        vendor_id = int("0x" + vendor_id, 16)
+        product_id = int("0x" + product_id, 16)
+        self._dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
+
+        if vendor_id == VENDOR_ID_CUSTOM:
+            self._endpoint_out = OUT_ENDPOINT_CUSTOM
+            self._endpoint_in = IN_ENDPOINT_CUSTOM
+
+        if not self._dev:
+            raise Exception("Could not find USB printer")
+
+        logging.debug(f"Found USB device {self._dev.manufacturer} {self._dev.product} {self._dev.serial_number}")
+        self._dev.reset()
+        # For some reason, we may not call dev.set_configuration() because the kernel already handles the printer
+
+        if len(self._dev.configurations()) > 1:
+            logger.warning("USB device has more than one configuration, the first one will be picked")
+
+        if len(self._dev.configurations()[0].interfaces()) > 1:
+            logger.warning("USB device has more than one configuration, the first one will be picked")
+
+        i = self._dev.configurations()[0].interfaces()[0].bInterfaceNumber
+
+        # Not clear if this is necessary
+        if self._dev.is_kernel_driver_active(i):
+            self._dev.detach_kernel_driver(i)
+
+    def write(self, data: bytes):
+        logger.debug(f"Write to printer [{len(data)}]: {data!r}")
+        self._dev.write(self._endpoint_out, data)
+
+    def read(self, size=1024, timeout=25):
+        data = self._dev.read(self._endpoint_in, 1024, 25)
+        if data:
+            data = bytes(data)
+            logger.debug(f"Read from printer [{len(data)}]: {data!r}")
+        return data
+
+    def close(self):
+        usb.util.dispose_resources(self._dev)
+
+    def poll_status(self):
+        poll_start = time.time()
+
+        logger.debug(f"Sending status poll")
+        self.write(bytes([DLE, EOT, STATUS_PAPER]))
+        while not (paper_status := bytes(x for x in self.read())):
+            if time.time() - poll_start > POLL_INTERVAL:
+                # When the printer is not ready, e.g. cover open, it will just not respond
+                # on USB or network interfaces. Therefore, polling STATUS_PRINTER is also pretty
+                # useless.
+                logger.info(f"Printer did not respond to polling")
+                return Status(type=TYPE_OFFLINE)
+            time.sleep(.001)
+
+        status = Status.from_escpos(paper_status[0])
+        logger.debug(f"Parsed status: {status!r}")
+        return status
+
+
+@contextlib.contextmanager
+def printer(usb_product):
+    with _print_lock:
+        p = Printer(usb_product)
+        try:
+            p.open()
+            yield p
+        finally:
+            p.close()
+
+
 def get_status():
     return _status
 
-def _poll(dev, endpoint_out, endpoint_in):
-    global _status
-    poll_start = time.time()
-
-    dev.write(endpoint_out, bytes([DLE, EOT, STATUS_PAPER]), 100)
-    while not (paper_status := bytes(x for x in dev.read(endpoint_in, 1024))):
-        if time.time() - poll_start > POLL_INTERVAL:
-            # When the printer is not ready, e.g. cover open, it will just not respond
-            # on USB or network interfaces. Therefore, polling STATUS_PRINTER is also pretty
-            # useless.
-            logger.info(f"Printer did not respond to polling")
-            _status = Status(type=TYPE_OFFLINE)
-            return
-        time.sleep(.001)
-    logger.debug(f"Raw paper status: {paper_status!r}")
-
-    _status = Status.from_escpos(paper_status[0])
-    logger.debug(f"Status: {_status!r}")
-
-
-def printer_loop_inner(usb_product):
-    global _last_poll
-
-    logging.info(f"Looking for USB device {usb_product}…")
-    vendor_id, product_id = usb_product.split(":", 1)
-    vendor_id = int("0x" + vendor_id, 16)
-    product_id = int("0x" + product_id, 16)
-    dev = usb.core.find(idVendor=vendor_id, idProduct=product_id)
-
-    if vendor_id == VENDOR_ID_CUSTOM:
-        endpoint_out = OUT_ENDPOINT_CUSTOM
-        endpoint_in = IN_ENDPOINT_CUSTOM
-    else:
-        endpoint_out = OUT_ENDPOINT_EPSON
-        endpoint_in = IN_ENDPOINT_EPSON
-
-    if not dev:
-        raise Exception("Could not find USB printer")
-    logging.info(f"Found USB device {dev.manufacturer} {dev.product} {dev.serial_number}")
-
-    dev.reset()
-    # For some reason, we may not call dev.set_configuration() because the kernel already handles the printer
-
-    if len(dev.configurations()) > 1:
-        logger.warning("USB device has more than one configuration, the first one will be picked")
-
-    if len(dev.configurations()[0].interfaces()) > 1:
-        logger.warning("USB device has more than one configuration, the first one will be picked")
-
-    i = dev.configurations()[0].interfaces()[0].bInterfaceNumber
-
-    # Not clear if this is necessary
-    if dev.is_kernel_driver_active(i):
-        dev.detach_kernel_driver(i)
-
-    while not _shutdown_requested:
-        if time.time() - _last_poll > POLL_INTERVAL and print_lock.acquire(blocking=False) and out_queue.empty():
-            try:
-                _poll(dev, endpoint_out, endpoint_in)
-            finally:
-                print_lock.release()
-                _last_poll = time.time()
-
-        try:
-            try:
-                while True:
-                    data_in = out_queue.get(block=False)
-                    logger.debug(f"Write to printer [{len(data_in)}]: {data_in!r}")
-                    dev.write(endpoint_out, data_in)
-            except USBTimeoutError:
-                logger.warning("Timeout while writing to USB printer, continue with next part")
-                pass
-        except queue.Empty:
-            pass
-
-        try:
-            while data_out := dev.read(endpoint_in, 1024, 25):
-                data_out = bytes(x for x in data_out)
-                logger.debug(f"Read from printer [{len(data_out)}]: {data_out!r}")
-                in_queue.put(data_out)
-        except USBTimeoutError:
-            pass
-
-        time.sleep(.001)
-
 
 def printer_loop(usb_product):
+    global _status, _last_poll
+
+    _last_poll = 0
+    logging.info(f"Printer loop is running")
     while not _shutdown_requested:
-        try:
-            printer_loop_inner(usb_product)
-        except:
-            logger.exception("Printer loop failed, restart in 5s")
-            time.sleep(5)
+        if time.time() - _last_poll > POLL_INTERVAL:
+            with printer(usb_product) as p:
+                _status = p.poll_status()
+                _last_poll = time.time()
 
 
 def start_printer_thread(usb_product):
+    logging.info(f"USB device is set to {usb_product}")
     t = threading.Thread(
         target=printer_loop,
         args=(usb_product,),
