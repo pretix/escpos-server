@@ -90,14 +90,19 @@ class Printer:
 
         logger.debug(f"Sending status poll")
         self.write(bytes([DLE, EOT, STATUS_PAPER]))
-        while not (paper_status := bytes(x for x in self.read())):
-            if time.time() - poll_start > POLL_INTERVAL:
-                # When the printer is not ready, e.g. cover open, it will just not respond
-                # on USB or network interfaces. Therefore, polling STATUS_PRINTER is also pretty
-                # useless.
-                logger.info(f"Printer did not respond to polling")
-                return Status(type=TYPE_OFFLINE)
-            time.sleep(.001)
+
+        try:
+            while not (paper_status := bytes(x for x in self.read())):
+                if time.time() - poll_start > POLL_INTERVAL:
+                    # When the printer is not ready, e.g. cover open, it will just not respond
+                    # on USB or network interfaces. Therefore, polling STATUS_PRINTER is also pretty
+                    # useless.
+                    logger.info(f"Printer did not respond to polling")
+                    return Status(type=TYPE_OFFLINE)
+                time.sleep(.001)
+        except usb.core.USBTimeoutError:
+            logger.debug(f"Printer did not respond to polling - USBTimeoutError")
+            return Status(type=TYPE_OFFLINE)
 
         status = Status.from_escpos(paper_status[0])
         logger.debug(f"Parsed status: {status!r}")
