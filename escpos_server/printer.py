@@ -89,9 +89,9 @@ class Printer:
         poll_start = time.time()
 
         logger.debug(f"Sending status poll")
-        self.write(bytes([DLE, EOT, STATUS_PAPER]))
-
         try:
+            self.write(bytes([DLE, EOT, STATUS_PAPER]))
+
             while not (paper_status := bytes(x for x in self.read())):
                 if time.time() - poll_start > POLL_INTERVAL:
                     # When the printer is not ready, e.g. cover open, it will just not respond
