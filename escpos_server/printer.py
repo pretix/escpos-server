@@ -131,9 +131,12 @@ def printer_loop(usb_product):
     logging.info(f"Printer loop is running")
     while not _shutdown_requested:
         if time.time() - _last_poll > POLL_INTERVAL:
-            with printer(usb_product) as p:
-                _status = p.poll_status()
-                _last_poll = time.time()
+            _last_poll = time.time()
+            try:
+                with printer(usb_product) as p:
+                    _status = p.poll_status()
+            except:
+                _status = Status(type=TYPE_OFFLINE)
 
 
 def start_printer_thread(usb_product):
