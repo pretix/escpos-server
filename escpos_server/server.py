@@ -28,7 +28,10 @@ class TCPHandler(socketserver.BaseRequestHandler):
                     pass
                 else:
                     if data_from_tcp:
-                        p.write(data_from_tcp)
+                        try:
+                            p.write(data_from_tcp)
+                        except USBTimeoutError:
+                            pass
 
                 try:
                     data_from_printer = p.read()
